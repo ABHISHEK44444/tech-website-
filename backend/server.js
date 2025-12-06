@@ -1,63 +1,216 @@
-require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const postsRouter = require('./routes/posts');
+const { User, Project, Task, Message, Team } = require('./models');
+require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 5000;
 
-// Middleware
-app.use(cors());
-app.use(express.json({ limit: '50mb' })); // Increased limit for base64 images
+// Allow all origins to prevent CORS issues between Vercel and Render
+app.use(cors({
+  origin: '*', 
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
-// Routes
-app.use('/api/posts', postsRouter);
+app.use(express.json());
 
 // Database Connection
-const startServer = async () => {
-  try {
-    const defaultUri = 'mongodb://127.0.0.1:27017/techflow';
-    let mongoUri = process.env.MONGO_URI;
+let isDbConnected = false;
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => {
+    console.log('MongoDB connected');
+    isDbConnected = true;
+  })
+  .catch(err => console.error('MongoDB connection error:', err));
 
-    if (!mongoUri) {
-        console.warn('⚠️  Warning: MONGO_URI not found in backend/.env');
-        console.warn(`⚠️  Falling back to local MongoDB: ${defaultUri}`);
-        mongoUri = defaultUri;
-    }
+// --- MIDDLEWARE ---
+// Fail fast if DB isn't ready
+app.use((req, res, next) => {
+  // Skip check for health route
+  if (req.path === '/' || req.path === '/api/health') return next();
 
-    await mongoose.connect(mongoUri);
-    console.log('✅ Connected to MongoDB');
-
-    app.listen(PORT, () => {
-      console.log(`🚀 Server running on http://localhost:${PORT}`);
-    });
-  } catch (err) {
-    if (err.code === 8000 || (err.message && err.message.includes('bad auth'))) {
-      console.error('\n❌ AUTHENTICATION ERROR: Login Failed.');
-      console.error('----------------------------------------------------');
-      console.error('The username or password in backend/.env is incorrect.');
-      console.error('\nCHECKLIST:');
-      console.error('1. Did you create the user in MongoDB Atlas (Database Access tab)?');
-      console.error('2. Did you copy the password correctly?');
-      console.error('3. Is your Cluster URL correct? (It should NOT be "cluster.mongodb.net")');
-      console.error(`   Current Host: ${process.env.MONGO_URI.split('@')[1]?.split('/')[0] || 'Unknown'}`);
-      console.error('\n👉 FIX: Update MONGO_URI in backend/.env with the correct credentials.\n');
-    } else if (err.name === 'MongooseServerSelectionError' && err.message.includes('ECONNREFUSED')) {
-      console.error('\n❌ CONNECTION ERROR: Server Not Reachable.');
-      console.error('----------------------------------------------------');
-      console.error('1. You do not have a local MongoDB server running.');
-      console.error('2. Your backend/.env file is missing the correct MONGO_URI.');
-      console.error('\n👉 ACTION REQUIRED: Open "backend/.env" and paste your MongoDB Connection String there.');
-    } else if (err.code === 'ENOTFOUND') {
-      console.error('\n❌ DNS ERROR: Invalid Hostname.');
-      console.error('----------------------------------------------------');
-      console.error('The hostname in your MONGO_URI is incorrect.');
-      console.error('\n👉 FIX: Use the exact connection string from MongoDB Atlas > Connect > Drivers.\n');
-    } else {
-      console.error('❌ Database connection error:', err);
-    }
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(503).json({ error: 'Database not ready', isOffline: true });
   }
-};
+  next();
+});
 
-startServer();
+// --- SYSTEM ROUTES ---
+
+// Root Route: Easy way to check if backend is live in browser
+app.get('/', (req, res) => {
+  res.send(`
+    <div style="font-family: sans-serif; text-align: center; padding: 50px;">
+      <h1 style="color: #4F46E5;">CollabFlow API is Running</h1>
+      <p>Status: <strong>${isDbConnected ? 'Online & Connected to DB' : 'Waiting for DB...'}</strong></p>
+      <p>Endpoint: <code>/api/health</code></p>
+    </div>
+  `);
+});
+
+// Health Check: Lightweight endpoint for frontend to ping
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date(), 
+    dbState: mongoose.connection.readyState 
+  });
+});
+
+// --- API ROUTES ---
+
+// --- AUTHENTICATION ---
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email } = req.body;
+    console.log(`[AUTH] Login attempt for: ${email}`);
+    
+    const user = await User.findOne({ email });
+    
+    if (!user) {
+      console.log(`[AUTH] User not found: ${email}`);
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    console.log(`[AUTH] Login successful: ${user.name} (${user.role})`);
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// USERS
+app.get('/api/users', async (req, res) => {
+  try {
+    const users = await User.find();
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/users/register', async (req, res) => {
+  try {
+    const { name, email, role } = req.body;
+    let user = await User.findOne({ email });
+    if (user) return res.status(400).json({ message: 'User already exists' });
+
+    user = new User({
+      name,
+      email,
+      role,
+      avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=random`
+    });
+    await user.save();
+    console.log(`[USER] New user registered: ${name}`);
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PROJECTS
+app.get('/api/projects', async (req, res) => {
+  try {
+    const projects = await Project.find();
+    res.json(projects);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects', async (req, res) => {
+  try {
+    const project = new Project(req.body);
+    await project.save();
+    console.log(`[PROJECT] Created: ${project.name}`);
+    res.json(project);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/projects/:id', async (req, res) => {
+  try {
+    await Project.findByIdAndDelete(req.params.id);
+    await Task.deleteMany({ projectId: req.params.id });
+    console.log(`[PROJECT] Deleted project ID: ${req.params.id}`);
+    res.json({ message: 'Project deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// TASKS
+app.get('/api/tasks', async (req, res) => {
+  try {
+    const tasks = await Task.find();
+    res.json(tasks);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/tasks', async (req, res) => {
+  try {
+    const task = new Task(req.body);
+    await task.save();
+    console.log(`[TASK] Created: ${task.title}`);
+    res.json(task);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/tasks/:id', async (req, res) => {
+  try {
+    if (req.body.assignedTo) {
+      const user = await User.findById(req.body.assignedTo);
+      console.log(`[TASK] Assigning task ${req.params.id} to user: ${user ? user.name : req.body.assignedTo}`);
+    }
+    
+    if (req.body.status) {
+      console.log(`[TASK] Updating status for ${req.params.id} to: ${req.body.status}`);
+    }
+
+    const task = await Task.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json(task);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/tasks/:id', async (req, res) => {
+  try {
+    await Task.findByIdAndDelete(req.params.id);
+    console.log(`[TASK] Deleted task: ${req.params.id}`);
+    res.json({ message: 'Task deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// MESSAGES
+app.get('/api/messages', async (req, res) => {
+  try {
+    const messages = await Message.find().sort({ timestamp: 1 });
+    res.json(messages);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/messages', async (req, res) => {
+  try {
+    const message = new Message(req.body);
+    await message.save();
+    console.log(`[CHAT] Message from ${message.senderId}: ${message.content}`);
+    res.json(message);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
