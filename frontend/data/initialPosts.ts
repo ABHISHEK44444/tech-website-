@@ -251,7 +251,7 @@ Whether you are a student, professional, or enthusiast, keeping an eye on this s
 
 *Tags: #${category.replace(/\s/g, '')} #India #Tech2025 #${getRandom(COMPANIES)}*
         `,
-        author: getRandom(['TechFlow Team', 'Aditi Sharma', 'Rahul Verma', 'Vikram Singh', 'Priya Patel']),
+        author: 'TechFlow Team', // Fixed Author for all posts
         category: category,
         readTime: `${3 + Math.floor(Math.random() * 7)} min read`,
         imageUrl: imageUrl,
