@@ -1,17 +1,52 @@
+
 const express = require('express');
 const router = express.Router();
-const { GoogleGenAI, Type } = require("@google/genai");
 
 router.post('/', async (req, res) => {
+  console.log("➡️ Generation Request Received");
   const { topic, category, tone } = req.body;
 
-  if (!process.env.API_KEY) {
-    console.error("API_KEY is missing in backend environment variables.");
-    return res.status(500).json({ message: "Server misconfiguration: API_KEY missing" });
+  // Safe access to API Key
+  const rawKey = process.env.API_KEY;
+  const apiKey = (rawKey || "").trim();
+  const platform = process.env.RENDER ? 'Render' : 'Vercel/Local';
+
+  // Check for API Key presence
+  if (!apiKey) {
+    console.error("❌ ERROR: Generation failed. API_KEY is missing in backend environment.");
+    return res.status(500).json({ 
+      message: "CONFIGURATION ERROR: API_KEY is missing.",
+      details: `Platform: ${platform}\nThe backend server checked 'process.env.API_KEY' and found nothing. Go to your Cloud Dashboard (Render/Vercel) > Environment > Add 'API_KEY'.`,
+      platform: platform
+    });
+  }
+
+  let GoogleGenAI, Type;
+
+  try {
+    // 1. Try Dynamic Import (ESM)
+    const genaiModule = await import("@google/genai");
+    GoogleGenAI = genaiModule.GoogleGenAI;
+    Type = genaiModule.Type;
+  } catch (esmErr) {
+    console.warn("⚠️ ESM Import failed, trying CommonJS require...", esmErr.message);
+    try {
+      // 2. Fallback to CommonJS Require
+      const genaiModule = require("@google/genai");
+      GoogleGenAI = genaiModule.GoogleGenAI;
+      Type = genaiModule.Type;
+    } catch (cjsErr) {
+      console.error("❌ CRITICAL: @google/genai dependency missing.", cjsErr);
+      return res.status(500).json({ 
+        message: "Backend dependency missing", 
+        error: `Failed to load @google/genai.`,
+        details: "The server cannot find the AI library. If running locally, run 'npm install' in the backend folder. If on Render, clear build cache and redeploy."
+      });
+    }
   }
 
   // Initialize Gemini API Client
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey: apiKey });
   const model = "gemini-2.5-flash";
 
   // Define category-specific high CPC instructions
@@ -53,7 +88,7 @@ router.post('/', async (req, res) => {
     {
       "title": "High CTR Title (Max 65 chars)",
       "excerpt": "Meta description style (Max 160 chars)",
-      "author": "TechFlow India Editor",
+      "author": "TechFlow Team",
       "tags": ["Tag1", "Tag2"],
       "introduction": "Strong Hook Intro paragraph (Markdown supported)",
       "sections": [
@@ -119,6 +154,7 @@ router.post('/', async (req, res) => {
     res.json(JSON.parse(text));
   } catch (error) {
     console.error("Error generating blog content:", error);
+    // Return the actual error message so the frontend can display it
     res.status(500).json({ message: "Failed to generate content", error: error.message });
   }
 });
